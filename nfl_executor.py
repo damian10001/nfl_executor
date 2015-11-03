@@ -2,24 +2,35 @@
 # Author: Damian Lasek (edamlas)
 # Date: 19.10.2015
 
+#History info:
+#2015-10-23 initial working version
+#2015-11-03 - added re-install build in case of fail; 
+#           - possibility of running other ttcn modules and more than one
+#
+
 import subprocess
 import argparse
 import datetime
 import shutil
 import os
+import re
 
 nflExecutorPath = '/vobs/ims_ttcn3/common/bin/nfl_executor'
 commonBinPath = '/vobs/ims_ttcn3/common/bin/'
 
 def parseArguments():
-    parser = argparse.ArgumentParser(description='Script for automatic running NFL_UC module')
+    parser = argparse.ArgumentParser(description='Script for automatic running TC modules. It is intended for running NFL_UC, but works also with other modules.')
     
     parser.add_argument('-b', '--build', required=True, help='path to MTAS build')
+#    parser.add_argument('modules', default='NFL_UC', help='List of modules to compile and execute. Default value is NFL_UC', metavar='module', type=str, nargs='*')
+    parser.add_argument('modules', help='List of modules to compile and execute. Default value is NFL_UC', metavar='module', type=str, nargs='*')
     return parser.parse_args()
 
-def generateMakefile():
+def generateMakefile(ttcn_modules):
+    print "List of modules to generate Makefile: ", ttcn_modules
+            
     # python2.7 /vobs/ims_ttcn3/projects/TAS/tools/tiger/src/puma/puma.py -c -t -A NFL_UC
-    p = subprocess.Popen('python2.7 /vobs/ims_ttcn3/projects/TAS/tools/tiger/src/puma/puma.py -c -t -A NFL_UC'.split(), cwd=commonBinPath)
+    p = subprocess.Popen(('python2.7 /vobs/ims_ttcn3/projects/TAS/tools/tiger/src/puma/puma.py -c -t -A ' + ' '.join(ttcn_modules)).split(), cwd=commonBinPath)
     p.wait()
     
     os.symlink('/vobs/ims_ttcn3/common/bin/.build/mtas', '/vobs/ims_ttcn3/common/bin/mtas')
@@ -33,17 +44,36 @@ def compileModule():
     p = subprocess.Popen('time make -j 8'.split(), cwd='/vobs/ims_ttcn3/common/bin/.build')
     p.wait()
     
-def regenerateDbAddToExecutionList():
-    # /vobs/ims_ttcn3/projects/TAS/ft_common/scripts/buildTcsList.pl --mod ALTCF_TRAF_TCs --output execution_list.lst --db mtas.db --regen_db
-    p = subprocess.Popen('/vobs/ims_ttcn3/projects/TAS/ft_common/scripts/buildTcsList.pl --mod NFL_UC --output execution_list.lst --db mtas.db --regen_db'.split(),
+def regenerateDbAddToExecutionList(ttcn_modules):
+    print "List of modules to add to execution_list.lst: ", ttcn_modules
+
+    # /vobs/ims_ttcn3/projects/TAS/ft_common/scripts/buildTcsList.pl --mod NFL_UC --output execution_list.lst --db mtas.db --regen_db
+    p = subprocess.Popen(['/vobs/ims_ttcn3/projects/TAS/ft_common/scripts/buildTcsList.pl', '--mod', ttcn_modules[0], '--output', 'execution_list.lst', '--db', 'mtas.db', '--regen_db'],
         cwd=commonBinPath)
     p.wait()
     
+    if len(ttcn_modules) > 1:
+        with open('/vobs/ims_ttcn3/common/bin/execution_list.lst', 'a') as file_:
+            for i in range(1, len(ttcn_modules)):
+                p = subprocess.Popen(['/vobs/ims_ttcn3/projects/TAS/ft_common/scripts/buildTcsList.pl', '--mod', ttcn_modules[i], '--output', 'execution_list_tmp.lst'],     
+                    cwd=commonBinPath)
+                p.wait()
+                
+                with open('/vobs/ims_ttcn3/common/bin/execution_list_tmp.lst', 'r') as file_tmp:
+                    exec_list_tmp = file_tmp.readlines()
+                
+                file_.writelines(exec_list_tmp)
+                
+            if os.path.exists('/vobs/ims_ttcn3/common/bin/execution_list_tmp.lst'):
+                os.remove('/vobs/ims_ttcn3/common/bin/execution_list_tmp.lst')
+        
 def installBuild(buildPath):
     # /vobs/ims_ttcn3/projects/TAS/ft_common/scripts/installer_maia.py --verbose start --timeout 1800 --hardware-type 2 --mtas-build <build> --use-force --consolelogs-size 9000000000
     p = subprocess.Popen(['python2.7', '/vobs/ims_ttcn3/projects/TAS/ft_common/scripts/installer_maia.py', '--verbose', 'start', \
         '--timeout', '1800', '--hardware-type', '2', '--mtas-build', buildPath, '--use-force', '--consolelogs-size', '9000000000'], cwd=commonBinPath)
-    p.wait()
+    exitcode = p.wait()
+    
+    return exitcode
     
 def generateConfigFiles(buildPath):
     # /vobs/ims_ttcn3/projects/TAS/tools/tiger/src/autoGenerateConfigFiles.pl -build <build> -maia -cfgdir /vobs/ims_ttcn3/common/bin/nfl_executor
@@ -70,8 +100,22 @@ def changeConfig():
     if not os.path.exists(logsPath):
         os.makedirs(logsPath)
     
-    data[53] = 'ttcnfw_logDir := "%s"\n' % logsPath  #TODO https://docs.python.org/2/howto/regex.html#search-and-replace
-    data[92] = 'ttcnfw_fullProcessing := "FALSE"\n'
+    pattern = "ttcnfw_logDir"
+    config = 'ttcnfw_logDir := "%s"\n' % logsPath
+        
+    for i in range (0, len(data)):
+        if re.search(pattern, data[i]): 
+            data[i] = config
+            
+    pattern = "ttcnfw_fullProcessing"
+    config = 'ttcnfw_fullProcessing := "FALSE"\n'
+
+    for i in range (0, len(data)):
+        if re.search(pattern, data[i]):
+            data[i] = config
+    
+#    data[53] = 'ttcnfw_logDir := "%s"\n' % logsPath  #TODO https://docs.python.org/2/howto/regex.html#search-and-replace
+#    data[92] = 'ttcnfw_fullProcessing := "FALSE"\n'
     
     with open('/vobs/ims_ttcn3/common/bin/nfl_executor/base.cfg', 'w') as file_:
         file_.writelines(data)
@@ -130,23 +174,36 @@ def selectFailedTcs():
 
 def main():
     args = parseArguments()
-#    generateMakefile()
+    if len(args.modules) == 0:
+        args.modules.append('NFL_UC')
+#    generateMakefile(args.modules)
 #    compileModule()
-    regenerateDbAddToExecutionList()
+#    regenerateDbAddToExecutionList(args.modules)
     generateConfigFiles(args.build)
     changeConfig()
-    linkConfig()
-    addTestcases()
-    installBuild(args.build)
-    runInitialConfiguration()
-
+#    linkConfig()
+#    addTestcases()
+"""
+    # install build, repeat if something went wrong
+    for i in range(3):
+        install_code = installBuild(args.build)
+        if install_code == 0:
+            # installation went OK, run initial configuration
+            runInitialConfiguration()
+            break
+    
+    # run testcases, repeat with failed
     for i in range(3):
         executeTests()
         selectFailedTcs()
         addTestcases()
-    
+"""        
     
     
 if __name__ == '__main__':
     main()
     
+    
+#######
+#TODO:
+# - poprawic edycje configu (https://docs.python.org/2/howto/regex.html#search-and-replace)
