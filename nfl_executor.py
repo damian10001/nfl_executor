@@ -6,7 +6,7 @@
 #2015-10-23 initial working version
 #2015-11-03 - added re-install build in case of fail; 
 #           - possibility of running other ttcn modules and more than one
-#
+#2015-11-04 - version 1.1 - should work :)
 
 import subprocess
 import argparse
@@ -22,7 +22,6 @@ def parseArguments():
     parser = argparse.ArgumentParser(description='Script for automatic running TC modules. It is intended for running NFL_UC, but works also with other modules.')
     
     parser.add_argument('-b', '--build', required=True, help='path to MTAS build')
-#    parser.add_argument('modules', default='NFL_UC', help='List of modules to compile and execute. Default value is NFL_UC', metavar='module', type=str, nargs='*')
     parser.add_argument('modules', help='List of modules to compile and execute. Default value is NFL_UC', metavar='module', type=str, nargs='*')
     return parser.parse_args()
 
@@ -114,9 +113,6 @@ def changeConfig():
         if re.search(pattern, data[i]):
             data[i] = config
     
-#    data[53] = 'ttcnfw_logDir := "%s"\n' % logsPath  #TODO https://docs.python.org/2/howto/regex.html#search-and-replace
-#    data[92] = 'ttcnfw_fullProcessing := "FALSE"\n'
-    
     with open('/vobs/ims_ttcn3/common/bin/nfl_executor/base.cfg', 'w') as file_:
         file_.writelines(data)
     
@@ -176,14 +172,14 @@ def main():
     args = parseArguments()
     if len(args.modules) == 0:
         args.modules.append('NFL_UC')
-#    generateMakefile(args.modules)
-#    compileModule()
-#    regenerateDbAddToExecutionList(args.modules)
+    generateMakefile(args.modules)
+    compileModule()
+    regenerateDbAddToExecutionList(args.modules)
     generateConfigFiles(args.build)
     changeConfig()
-#    linkConfig()
-#    addTestcases()
-"""
+    linkConfig()
+    addTestcases()
+
     # install build, repeat if something went wrong
     for i in range(3):
         install_code = installBuild(args.build)
@@ -197,13 +193,9 @@ def main():
         executeTests()
         selectFailedTcs()
         addTestcases()
-"""        
+        
     
     
 if __name__ == '__main__':
     main()
     
-    
-#######
-#TODO:
-# - poprawic edycje configu (https://docs.python.org/2/howto/regex.html#search-and-replace)
