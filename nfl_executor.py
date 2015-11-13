@@ -7,6 +7,10 @@
 #2015-11-03 - added re-install build in case of fail; 
 #           - possibility of running other ttcn modules and more than one
 #2015-11-04 - version 1.1 - should work :)
+#2015-11-13 - generating simple summary
+#           - sending mail when execution is done
+#           - protection of not generated execution_list.lst
+#           - version 1.2
 
 import subprocess
 import argparse
@@ -14,13 +18,23 @@ import datetime
 import shutil
 import os
 import re
+import textwrap
+from mail_sender import send_mail
 
 nflExecutorPath = '/vobs/ims_ttcn3/common/bin/nfl_executor'
 commonBinPath = '/vobs/ims_ttcn3/common/bin/'
 
 def parseArguments():
-    parser = argparse.ArgumentParser(description='Script for automatic running TC modules. It is intended for running NFL_UC, but works also with other modules.')
-    
+    parser = argparse.ArgumentParser(formatter_class=argparse.RawDescriptionHelpFormatter,
+                                     description=textwrap.dedent('''\
+                                     Script for automatic running TC modules.
+                                     It is intended for running NFL_UC, but works also with other modules.'''),
+                                     epilog=textwrap.dedent('''
+                                     Requirements:
+                                     - view is needed and config spec set to desired branch/label,
+                                     - sourced setup,
+                                     - Diameter Daemon is running
+                                     '''))
     parser.add_argument('-b', '--build', required=True, help='path to MTAS build')
     parser.add_argument('modules', help='List of modules to compile and execute. Default value is NFL_UC', metavar='module', type=str, nargs='*')
     return parser.parse_args()
@@ -45,11 +59,21 @@ def compileModule():
     
 def regenerateDbAddToExecutionList(ttcn_modules):
     print "List of modules to add to execution_list.lst: ", ttcn_modules
-
+    
     # /vobs/ims_ttcn3/projects/TAS/ft_common/scripts/buildTcsList.pl --mod NFL_UC --output execution_list.lst --db mtas.db --regen_db
     p = subprocess.Popen(['/vobs/ims_ttcn3/projects/TAS/ft_common/scripts/buildTcsList.pl', '--mod', ttcn_modules[0], '--output', 'execution_list.lst', '--db', 'mtas.db', '--regen_db'],
         cwd=commonBinPath)
     p.wait()
+    
+    for retry in range(3):
+        if not os.path.exists('/vobs/ims_ttcn3/common/bin/execution_list.lst'):
+            # something went wrong with generating execution_list - try again
+            p = subprocess.Popen(['/vobs/ims_ttcn3/projects/TAS/ft_common/scripts/buildTcsList.pl', '--mod', ttcn_modules[0], '--output', 'execution_list.lst', '--db', 'mtas.db', '--regen_db'],
+                cwd=commonBinPath)
+            p.wait()
+        else:
+            print "execution_list.lst generated successfully"
+            break
     
     if len(ttcn_modules) > 1:
         with open('/vobs/ims_ttcn3/common/bin/execution_list.lst', 'a') as file_:
@@ -94,7 +118,7 @@ def changeConfig():
     username = os.getlogin()
     t = datetime.datetime.now()
     
-    logsPath = '/home/%s/logs/NFL/%s' % (username, t.strftime("%Y%m%d_%H%M%S"))
+    logsPath = '/home/%s/logs/nfl_executor/%s' % (username, t.strftime("%Y%m%d_%H%M%S"))
     
     if not os.path.exists(logsPath):
         os.makedirs(logsPath)
@@ -140,6 +164,9 @@ def addTestcases():
             execution_list = exec_list.readlines()
         titan.writelines(execution_list)
     
+    # return number of testcases to run
+    return len(execution_list)
+    
 def runInitialConfiguration():
     # /app/TITAN/5_R3A/LMWP3.3/bin/ttcn3_start mtas /home/edamlas/config/titan.cfg testAutomation.initialConfiguration
     p = subprocess.Popen('/app/TITAN/5_R3A/LMWP3.3/bin/ttcn3_start mtas titan.cfg testAutomation.initialConfiguration'.split(), cwd=commonBinPath)
@@ -166,36 +193,93 @@ def selectFailedTcs():
     with open('/vobs/ims_ttcn3/common/bin/execution_list.lst', 'w+') as exec_list:
         for line in failed_tcs:
             exec_list.write(line + "\n")
+            
+class executionSummary(object):
+    logsPath = ""
+    build = ""
+    numberOfTcsToRun = []
+    numberOfPassedTcs = []
+    modules = []
     
+    def __init__(self):
+        pass
+    
+    def addTcsStats(self, tcRun, tcNumber):
+        self.numberOfTcsToRun.insert(tcRun, tcNumber)
+        self.numberOfPassedTcs.append(self.numberOfTcsToRun[tcRun-1] - self.numberOfTcsToRun[tcRun])
+        
+        
+    def printSummary(self):
+        print self.logsPath
+        print self.build
+        print self.modules
+        print self.numberOfTcsToRun
+    def generateSummary(self):
+        return_summary = textwrap.dedent('''
+        Summary of running TTCN testcases
+        ---------------------------------
+        
+        Used build: %s
+        Executed modules: %s
+        
+        ''' % (self.build, self.modules))
+        
+        tcsNumber = ""
+        for i in range(len(self.numberOfTcsToRun)):
+            tcsNumber += "Run[%s]: %s testcases passed; %s testcases to execute\n" % (i, self.numberOfPassedTcs[i], self.numberOfTcsToRun[i])
+            
+        return_summary += tcsNumber
+        
+        return_summary += "\nLogs are stored in: %s" % self.logsPath
+        
+        return_summary += "\n\nBr,\nNfl Executor"
+
+        return return_summary
+    
+    def sendMail(self):
+        send_mail(os.getlogin(), self.generateSummary())
 
 def main():
     args = parseArguments()
     if len(args.modules) == 0:
         args.modules.append('NFL_UC')
+        
+    summary = executionSummary()
+    summary.modules = args.modules
+    summary.build = args.build
+        
     generateMakefile(args.modules)
     compileModule()
     regenerateDbAddToExecutionList(args.modules)
+    
     generateConfigFiles(args.build)
-    changeConfig()
+    
+    summary.logsPath = changeConfig()
     linkConfig()
-    addTestcases()
-
+ 
     # install build, repeat if something went wrong
     for i in range(3):
-        install_code = installBuild(args.build)
-        if install_code == 0:
+        install_return_code = installBuild(args.build)
+        if install_return_code == 0:
             # installation went OK, run initial configuration
             runInitialConfiguration()
             break
     
     # run testcases, repeat with failed
     for i in range(3):
+        numberOfAddedTcs = addTestcases()
+        summary.addTcsStats(i, numberOfAddedTcs)
         executeTests()
         selectFailedTcs()
-        addTestcases()
-        
+
+    numberOfAddedTcs = addTestcases()
+    summary.addTcsStats(3, numberOfAddedTcs)
+    
+    print summary.generateSummary()
+    summary.sendMail()
     
     
 if __name__ == '__main__':
     main()
+    
     
