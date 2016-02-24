@@ -8,7 +8,7 @@ from email.mime.text import MIMEText
 def send_mail(recipient_address, message):
     # me == my email address
     # you == recipient's email address
-    me = "damian.lasek@ericsson.com"
+    me = "nfl_executor@ericsson.com"
     you = recipient_address
     
     # Create message container - the correct MIME type is multipart/alternative.

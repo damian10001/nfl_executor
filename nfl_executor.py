@@ -51,34 +51,38 @@ def generateMakefile(ttcn_modules):
 def compileModule():
     # time make compile
     p = subprocess.Popen('time make compile'.split(), cwd='/vobs/ims_ttcn3/common/bin/.build')
-    p.wait()
+    exit_code = p.wait()
+    print "exit code make compile", exit_code
+    
 
     # time make -j 8
     p = subprocess.Popen('time make -j 8'.split(), cwd='/vobs/ims_ttcn3/common/bin/.build')
-    p.wait()
+    exit_code = p.wait()
+    print "exit code make make -j", exit_code
     
 def regenerateDbAddToExecutionList(ttcn_modules):
     print "List of modules to add to execution_list.lst: ", ttcn_modules
     
     # /vobs/ims_ttcn3/projects/TAS/ft_common/scripts/buildTcsList.pl --mod NFL_UC --output execution_list.lst --db mtas.db --regen_db
-    p = subprocess.Popen(['/vobs/ims_ttcn3/projects/TAS/ft_common/scripts/buildTcsList.pl', '--mod', ttcn_modules[0], '--output', 'execution_list.lst', '--db', 'mtas.db', '--regen_db'],
+    p = subprocess.Popen(['/vobs/ims_ttcn3/projects/TAS/FTFW/scripts/buildTcsList.pl', '--mod', ttcn_modules[0], '--output', 'execution_list.lst', '--db', 'mtas.db', '--regen_db'],
         cwd=commonBinPath)
     p.wait()
     
-    for retry in range(3):
-        if not os.path.exists('/vobs/ims_ttcn3/common/bin/execution_list.lst'):
-            # something went wrong with generating execution_list - try again
-            p = subprocess.Popen(['/vobs/ims_ttcn3/projects/TAS/ft_common/scripts/buildTcsList.pl', '--mod', ttcn_modules[0], '--output', 'execution_list.lst', '--db', 'mtas.db', '--regen_db'],
-                cwd=commonBinPath)
-            p.wait()
-        else:
-            print "execution_list.lst generated successfully"
-            break
+    # probably not needed
+#     for retry in range(3):
+#         if not os.path.exists('/vobs/ims_ttcn3/common/bin/execution_list.lst'):
+#             # something went wrong with generating execution_list - try again
+#             p = subprocess.Popen(['/vobs/ims_ttcn3/projects/TAS/ft_common/scripts/buildTcsList.pl', '--mod', ttcn_modules[0], '--output', 'execution_list.lst', '--db', 'mtas.db', '--regen_db'],
+#                 cwd=commonBinPath)
+#             p.wait()
+#         else:
+#             print "execution_list.lst generated successfully"
+#             break
     
     if len(ttcn_modules) > 1:
         with open('/vobs/ims_ttcn3/common/bin/execution_list.lst', 'a') as file_:
             for i in range(1, len(ttcn_modules)):
-                p = subprocess.Popen(['/vobs/ims_ttcn3/projects/TAS/ft_common/scripts/buildTcsList.pl', '--mod', ttcn_modules[i], '--output', 'execution_list_tmp.lst'],     
+                p = subprocess.Popen(['/vobs/ims_ttcn3/projects/TAS/FTFW/scripts/buildTcsList.pl', '--mod', ttcn_modules[i], '--output', 'execution_list_tmp.lst'],     
                     cwd=commonBinPath)
                 p.wait()
                 
@@ -92,7 +96,7 @@ def regenerateDbAddToExecutionList(ttcn_modules):
         
 def installBuild(buildPath):
     # /vobs/ims_ttcn3/projects/TAS/ft_common/scripts/installer_maia.py --verbose start --timeout 1800 --hardware-type 2 --mtas-build <build> --use-force --consolelogs-size 9000000000
-    p = subprocess.Popen(['python2.7', '/vobs/ims_ttcn3/projects/TAS/ft_common/scripts/installer_maia.py', '--verbose', 'start', \
+    p = subprocess.Popen(['python2.7', '/vobs/ims_ttcn3/projects/TAS/FTFW/artifacts/scripts/installer_maia.py', '--verbose', 'start', \
         '--timeout', '1800', '--hardware-type', '2', '--mtas-build', buildPath, '--use-force', '--consolelogs-size', '9000000000'], cwd=commonBinPath)
     exitcode = p.wait()
     
@@ -104,7 +108,7 @@ def generateConfigFiles(buildPath):
        
     os.makedirs(nflExecutorPath)
         
-    os.environ['FT_WORK_DIR'] = nflExecutorPath
+#     os.environ['FT_WORK_DIR'] = nflExecutorPath
     
     p = subprocess.Popen(['/vobs/ims_ttcn3/projects/TAS/tools/tiger/src/autoGenerateConfigFiles.pl', '-build', buildPath, '-maia', '-cfgdir', nflExecutorPath])
     p.wait()
@@ -194,6 +198,14 @@ def selectFailedTcs():
         for line in failed_tcs:
             exec_list.write(line + "\n")
             
+def diameterChecker():
+    username = os.getlogin()
+    configPath = "/home/" + username + "/config/Diameter_Daemon.cfg"
+    p = subprocess.Popen(["/vobs/ims_ttcn3/projects/TAS/FTFW/daemon/EINSS7/bin/Daemon_Diameter_Supervisor.tcsh", configPath])
+    exit_code = p.wait()
+    
+    return exit_code
+            
 class executionSummary(object):
     logsPath = ""
     build = ""
@@ -253,10 +265,10 @@ def main():
     regenerateDbAddToExecutionList(args.modules)
     
     generateConfigFiles(args.build)
-    
+     
     summary.logsPath = changeConfig()
     linkConfig()
- 
+  
     # install build, repeat if something went wrong
     for i in range(3):
         install_return_code = installBuild(args.build)
@@ -264,14 +276,20 @@ def main():
             # installation went OK, run initial configuration
             runInitialConfiguration()
             break
-    
+
+    print "diameter checker exit code: ", diameterChecker()
+     
+    # regenerate database and add testcases to execution_list.lst
+    regenerateDbAddToExecutionList(args.modules)
+     
     # run testcases, repeat with failed
     for i in range(3):
         numberOfAddedTcs = addTestcases()
         summary.addTcsStats(i, numberOfAddedTcs)
         executeTests()
         selectFailedTcs()
-
+ 
+    # adding testcases only for statistics
     numberOfAddedTcs = addTestcases()
     summary.addTcsStats(3, numberOfAddedTcs)
     
@@ -282,4 +300,8 @@ def main():
 if __name__ == '__main__':
     main()
     
-    
+
+# TODO
+#######################
+#Diameter Daemon: /vobs/ims_ttcn3/projects/TAS/FTFW/daemon/EINSS7/bin
+#Usage: ./Daemon_Diameter_Supervisor.tcsh ~/config/Diameter_Daemon.cfg
